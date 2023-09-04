@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <sys/time.h>
+#include <time.h>
 
 #include "./queue.h"
 
@@ -208,12 +208,6 @@ int queue_get_data_with_timeout(queue_t *queue_name, uint8_t *data, const uint32
 {
     // 实际获取个数
     uint32_t get_num = 0;
-    // 等待信号的开始时间
-    struct timeval start_time;
-    // 等待信号的结束时间
-    struct timespec end_time;
-    // 等待信号超时标志
-    uint8_t timeout_flag = 0;
 
     if ((!queue_name) || (!data) || (!data_len))
     {
@@ -222,10 +216,21 @@ int queue_get_data_with_timeout(queue_t *queue_name, uint8_t *data, const uint32
 
     if (timeout > 0)
     {
-        // 确定信号超时时刻
-        gettimeofday(&start_time, NULL);
+        // 等待信号的开始时间
+        struct timespec start_time = {0};
+        clock_gettime(CLOCK_REALTIME, &start_time);
+
+        // 等待信号的结束时间
+        struct timespec end_time = {0};
         end_time.tv_sec = (start_time.tv_sec + (timeout / 1000));
-        end_time.tv_nsec = ((start_time.tv_usec * 1000) + ((timeout % 1000) * 1000000));
+        end_time.tv_nsec = ((start_time.tv_nsec + ((timeout % 1000) * 1000000)));
+
+        // tv_nsec必须小于1S
+        if (end_time.tv_nsec >= 1000000000)
+        {
+            end_time.tv_sec++;
+            end_time.tv_nsec -= 1000000000;
+        }
 
         // 没有数据才超时等待信号
         // 使用while而不使用if, 防止该线程进入睡眠时, 被其他信号打断, 而过早的退出睡眠
@@ -234,19 +239,22 @@ int queue_get_data_with_timeout(queue_t *queue_name, uint8_t *data, const uint32
             pthread_mutex_lock(&queue_name->queue_mutex);
 
             // 超时方式等待一个信号
-            timeout_flag = pthread_cond_timedwait(&queue_name->queue_cond,
-                                                  &queue_name->queue_mutex,
-                                                  &end_time);
+            int ret = pthread_cond_timedwait(&queue_name->queue_cond, &queue_name->queue_mutex, &end_time);
 
-            // 超时, 直接返回
-            if ((timeout > 0) && (ETIMEDOUT == timeout_flag))
+            // 等待过程中被信号中断, 继续等待
+            if (EINTR == ret)
+            {
+                pthread_mutex_unlock(&queue_name->queue_mutex);
+
+                continue;
+            }
+            // 超时或其它错误, 直接退出, 防止一直等待
+            else
             {
                 pthread_mutex_unlock(&queue_name->queue_mutex);
 
                 return -1;
             }
-
-            pthread_mutex_unlock(&queue_name->queue_mutex);
         }
     }
 
