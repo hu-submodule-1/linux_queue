@@ -240,21 +240,15 @@ int queue_get_data_with_timeout(queue_t *queue_name, uint8_t *data, const uint32
 
             // 超时方式等待一个信号
             int ret = pthread_cond_timedwait(&queue_name->queue_cond, &queue_name->queue_mutex, &end_time);
-
-            // 等待过程中被信号中断, 继续等待
-            if (EINTR == ret)
-            {
-                pthread_mutex_unlock(&queue_name->queue_mutex);
-
-                continue;
-            }
-            // 超时或其它错误, 直接退出, 防止一直等待
-            else
+            // 超时, 直接返回
+            if (ETIMEDOUT == ret)
             {
                 pthread_mutex_unlock(&queue_name->queue_mutex);
 
                 return -1;
             }
+
+            pthread_mutex_unlock(&queue_name->queue_mutex);
         }
     }
 
